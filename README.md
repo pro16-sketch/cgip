@@ -1,6 +1,6 @@
-# Image Processing Demo (Flask + OpenCV)
+# Image Processing Demo (Streamlit + OpenCV)
 
-Simple local demo that serves `index.html` and exposes `/api/process` to apply basic image operations using OpenCV.
+Simple local demo that runs as a Streamlit app and applies image operations using OpenCV.
 
 Prereqs
 - Python 3.8+
@@ -17,10 +17,11 @@ python -m pip install -r requirements.txt
 Run
 
 ```powershell
-python app.py
+streamlit run app.py
 ```
 
-Open http://localhost:5000 in your browser.
+Streamlit will print a local URL in the terminal (usually http://localhost:8501).
 
 Notes
-- This is a demo. Do not expose the server publicly without adding authentication and validation.
+- This app no longer depends on `index.html`.
+- This is a demo. Do not expose the app publicly without adding authentication and validation.

@@ -1,15 +1,10 @@
-import os
 from io import BytesIO
-from flask import Flask, request, jsonify, send_file, send_from_directory
+import streamlit as st
 import cv2
 import numpy as np
 
 
-app = Flask(__name__, static_folder='.', static_url_path='')
-
-
-def read_image_file(file_storage):
-	data = file_storage.read()
+def read_image_bytes(data):
 	arr = np.frombuffer(data, np.uint8)
 	img = cv2.imdecode(arr, cv2.IMREAD_UNCHANGED)
 	if img is None:
@@ -20,6 +15,12 @@ def read_image_file(file_storage):
 	elif img.shape[2] == 4:
 		img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
 	return img
+
+
+def bgr_to_rgb_for_display(img):
+	if len(img.shape) == 2:
+		return img
+	return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
 
 def cv2_to_bytes(img, fmt='jpg', quality=90):
@@ -454,155 +455,180 @@ def enhance_image(img, fix_negative=False, denoise_h=0.0, clahe_clip=2.0, sharpe
 	return out
 
 
-@app.route('/')
-def index():
-	return send_from_directory('.', 'index.html')
+def run_operation(img, op, params):
+	if op == 'brightness_contrast':
+		return adjust_brightness_contrast(img, alpha=params['alpha'], beta=params['beta'])
+	if op == 'grayscale':
+		return to_grayscale(img)
+	if op == 'blur':
+		return blur_image(img, ksize=params['ksize'])
+	if op == 'sharpen':
+		return sharpen_image(img)
+	if op == 'edge':
+		return edge_detection(img, method=params['method'])
+	if op == 'color_filter':
+		return color_filter(img, params['type'])
+	if op == 'restore':
+		return undo_color_filter(img, params['type'])
+	if op == 'illustrate':
+		return cartoonify_image(
+			img,
+			downscale=params['downscale'],
+			num_bilateral=params['num_bilateral'],
+			edge_ksize=params['edge_ksize'],
+		)
+	if op == 'haze':
+		return add_haze(
+			img,
+			intensity=params['intensity'],
+			color_hex=params['color'],
+			vertical=params['vertical'],
+		)
+	if op == 'enhance':
+		return enhance_image(
+			img,
+			fix_negative=params['fix_negative'],
+			denoise_h=params['denoise_h'],
+			clahe_clip=params['clahe_clip'],
+			sharpen_amount=params['sharpen_amount'],
+			gamma=params['gamma'],
+			awb=params['awb'],
+		)
+	if op == 'rotate':
+		return rotate_image(img, params['angle'])
+	if op == 'resize':
+		return resize_image(img, params['w'], params['h'])
+	if op == 'crop':
+		return crop_image(img, params['x'], params['y'], params['w'], params['h'])
+	return img
 
 
-@app.route('/api/process', methods=['POST'])
-def process_image():
-	# Expects form-data: image=file, op=operation, and parameters depending on op
-	if 'image' not in request.files:
-		return jsonify({'error': 'no image file provided'}), 400
-	file = request.files['image']
-	img = read_image_file(file)
+def main():
+	st.set_page_config(page_title='Image Processing Studio', layout='wide')
+	st.title('Image Processing Studio')
+	st.caption('Streamlit app using OpenCV. No index.html dependency.')
+
+	uploaded = st.file_uploader('Upload an image', type=['png', 'jpg', 'jpeg', 'webp', 'tif', 'tiff'])
+	if uploaded is None:
+		st.info('Upload an image to begin.')
+		return
+
+	img = read_image_bytes(uploaded.getvalue())
 	if img is None:
-		return jsonify({'error': 'invalid image'}), 400
+		st.error('Could not decode image.')
+		return
 
-	op = request.form.get('op', '')
+	h, w = img.shape[:2]
+
+	operations = [
+		'none',
+		'brightness_contrast',
+		'grayscale',
+		'blur',
+		'sharpen',
+		'edge',
+		'color_filter',
+		'restore',
+		'illustrate',
+		'haze',
+		'enhance',
+		'rotate',
+		'resize',
+		'crop',
+		'compress',
+	]
+
+	st.sidebar.header('Controls')
+	op = st.sidebar.selectbox('Operation', operations, index=0)
+	params = {}
+
+	if op == 'brightness_contrast':
+		params['alpha'] = st.sidebar.slider('Contrast (alpha)', 0.0, 3.0, 1.0, 0.05)
+		params['beta'] = st.sidebar.slider('Brightness (beta)', -100, 100, 0)
+	elif op == 'blur':
+		params['ksize'] = st.sidebar.slider('Kernel Size', 1, 31, 5, 2)
+	elif op == 'edge':
+		params['method'] = st.sidebar.selectbox('Method', ['canny', 'sobel'])
+	elif op in ('color_filter', 'restore'):
+		params['type'] = st.sidebar.selectbox('Filter Type', ['sepia', 'negative', 'warm', 'cool', 'vintage', 'emboss', 'sketch'])
+	elif op == 'illustrate':
+		params['downscale'] = st.sidebar.slider('Downscale', 1, 4, 1)
+		params['num_bilateral'] = st.sidebar.slider('Bilateral Passes', 1, 12, 7)
+		params['edge_ksize'] = st.sidebar.slider('Edge Kernel Size', 1, 15, 5, 2)
+	elif op == 'haze':
+		params['intensity'] = st.sidebar.slider('Haze Intensity', 0.0, 1.0, 0.5, 0.01)
+		params['color'] = st.sidebar.color_picker('Haze Color', '#ffffff')
+		params['vertical'] = st.sidebar.checkbox('Top-heavy haze', value=True)
+	elif op == 'enhance':
+		params['fix_negative'] = st.sidebar.checkbox('Fix Negative', value=False)
+		params['denoise_h'] = st.sidebar.slider('Denoise', 0.0, 20.0, 0.0, 0.5)
+		params['clahe_clip'] = st.sidebar.slider('CLAHE Clip', 0.0, 8.0, 2.0, 0.1)
+		params['sharpen_amount'] = st.sidebar.slider('Sharpen', 0.0, 3.0, 0.8, 0.1)
+		params['gamma'] = st.sidebar.slider('Gamma', 0.2, 3.0, 1.0, 0.05)
+		params['awb'] = st.sidebar.checkbox('Auto White Balance', value=False)
+	elif op == 'rotate':
+		params['angle'] = st.sidebar.slider('Angle', -180.0, 180.0, 0.0, 1.0)
+	elif op == 'resize':
+		params['w'] = st.sidebar.number_input('Width', min_value=1, max_value=10000, value=int(w), step=1)
+		params['h'] = st.sidebar.number_input('Height', min_value=1, max_value=10000, value=int(h), step=1)
+	elif op == 'crop':
+		params['x'] = st.sidebar.number_input('X', min_value=0, max_value=max(0, int(w - 1)), value=0, step=1)
+		params['y'] = st.sidebar.number_input('Y', min_value=0, max_value=max(0, int(h - 1)), value=0, step=1)
+		params['w'] = st.sidebar.number_input('Crop Width', min_value=1, max_value=int(w), value=int(w), step=1)
+		params['h'] = st.sidebar.number_input('Crop Height', min_value=1, max_value=int(h), value=int(h), step=1)
+	elif op == 'compress':
+		params['target'] = st.sidebar.number_input('Target Size', min_value=1.0, value=300.0, step=10.0)
+		params['unit'] = st.sidebar.selectbox('Unit', ['kb', 'mb', 'bytes'])
+		params['fmt'] = st.sidebar.selectbox('Preferred Format', ['jpg', 'png', 'webp'])
+
+	out_fmt = 'jpg'
+	out_data = None
+	processed = img
 
 	try:
-		if op == 'brightness_contrast':
-			alpha = float(request.form.get('alpha', 1.0))
-			beta = float(request.form.get('beta', 0.0))
-			out = adjust_brightness_contrast(img, alpha=alpha, beta=beta)
-		elif op == 'grayscale':
-			out = to_grayscale(img)
-		elif op == 'blur':
-			k = int(request.form.get('ksize', 5))
-			out = blur_image(img, ksize=k)
-		elif op == 'sharpen':
-			out = sharpen_image(img)
-		elif op == 'edge':
-			method = request.form.get('method', 'canny')
-			out = edge_detection(img, method=method)
-		elif op == 'color_filter':
-			typ = request.form.get('type', 'sepia')
-			out = color_filter(img, typ)
-		elif op == 'restore' or op == 'unfilter':
-			# Attempt to reverse a prior color filter; requires the filter type param
-			typ = request.form.get('type', 'sepia')
-			out = undo_color_filter(img, typ)
-		elif op == 'illustrate':
-			# optional params: downscale, num_bilateral, edge_ksize (illustration/cartoon effect)
-			downscale = int(request.form.get('downscale', 1))
-			num_bilateral = int(request.form.get('num_bilateral', 7))
-			edge_ksize = int(request.form.get('edge_ksize', 5))
-			out = cartoonify_image(img, downscale=downscale, num_bilateral=num_bilateral, edge_ksize=edge_ksize)
-		elif op == 'haze':
-			# params: intensity (0..1 or 0..100), color (hex), vertical (0/1)
-			try:
-				int_raw = request.form.get('intensity', '0.5')
-				intensity = float(int_raw)
-			except Exception:
-				intensity = 0.5
-			# allow percent inputs (0..100)
-			if intensity > 1.0:
-				intensity = intensity / 100.0
-			color = request.form.get('color', '#ffffff')
-			vertical = str(request.form.get('vertical', '1')).lower() in ('1', 'true', 'yes')
-			out = add_haze(img, intensity=intensity, color_hex=color, vertical=vertical)
-		elif op == 'enhance':
-			# parameters: fix_negative (0/1), denoise_h, clahe_clip, sharpen_amount, gamma, awb
-			fix_neg = request.form.get('fix_negative', '0')
-			fix_negative = str(fix_neg).lower() in ('1', 'true', 'yes')
-			try:
-				denoise_h = float(request.form.get('denoise_h', 0))
-			except Exception:
-				denoise_h = 0.0
-			try:
-				clahe_clip = float(request.form.get('clahe_clip', 2.0))
-			except Exception:
-				clahe_clip = 2.0
-			try:
-				sharpen_amount = float(request.form.get('sharpen_amount', 0.8))
-			except Exception:
-				sharpen_amount = 0.8
-			try:
-				gamma = float(request.form.get('gamma', 1.0))
-			except Exception:
-				gamma = 1.0
-			awb = str(request.form.get('awb', '0')).lower() in ('1', 'true', 'yes')
-			out = enhance_image(img, fix_negative=fix_negative, denoise_h=denoise_h, clahe_clip=clahe_clip, sharpen_amount=sharpen_amount, gamma=gamma, awb=awb)
-		elif op == 'rotate':
-			ang = float(request.form.get('angle', 0.0))
-			out = rotate_image(img, ang)
-		elif op == 'resize':
-			w = int(request.form.get('w', img.shape[1]))
-			h = int(request.form.get('h', img.shape[0]))
-			out = resize_image(img, w, h)
-		elif op == 'crop':
-			x = int(request.form.get('x', 0))
-			y = int(request.form.get('y', 0))
-			w = int(request.form.get('w', img.shape[1]))
-			h = int(request.form.get('h', img.shape[0]))
-			out = crop_image(img, x, y, w, h)
-		elif op == 'compress':
-			# target: number; unit: kb or mb (case-insensitive). Optionally accept target as bytes when unit is 'b'
-			target_raw = request.form.get('target', '')
-			unit = request.form.get('unit', 'kb').lower()
-			try:
-				target_val = float(target_raw)
-			except:
-				return jsonify({'error': 'invalid target size'}), 400
-			if unit in ('mb', 'm'):
+		if op == 'compress':
+			target_val = float(params['target'])
+			unit = params['unit']
+			if unit == 'mb':
 				target_bytes = int(target_val * 1024 * 1024)
-			elif unit in ('kb', 'k'):
+			elif unit == 'kb':
 				target_bytes = int(target_val * 1024)
-			elif unit in ('b', 'bytes'):
+			else:
 				target_bytes = int(target_val)
-			else:
-				return jsonify({'error': 'unknown unit; use kb or mb'}), 400
-			# call helper; honor fmt parameter
-			fmt = request.form.get('fmt', 'jpg')
-			data, out_fmt = compress_to_target(img, fmt=fmt, target_bytes=target_bytes)
-			of = out_fmt.lower()
-			if of in ('jpg', 'jpeg'):
-				mimetype = 'image/jpeg'
-			elif of == 'png':
-				mimetype = 'image/png'
-			elif of == 'webp':
-				mimetype = 'image/webp'
-			elif of in ('tif', 'tiff'):
-				mimetype = 'image/tiff'
-			else:
-				mimetype = 'application/octet-stream'
-			return send_file(BytesIO(data), mimetype=mimetype)
+			out_data, out_fmt = compress_to_target(img, fmt=params['fmt'], target_bytes=target_bytes)
+			decoded = cv2.imdecode(np.frombuffer(out_data, np.uint8), cv2.IMREAD_UNCHANGED)
+			if decoded is not None:
+				if len(decoded.shape) == 2:
+					processed = decoded
+				elif decoded.shape[2] == 4:
+					processed = cv2.cvtColor(decoded, cv2.COLOR_BGRA2BGR)
+				else:
+					processed = decoded
 		else:
-			out = img
+			if op != 'none':
+				processed = run_operation(img, op, params)
+			out_fmt = st.sidebar.selectbox('Output Format', ['jpg', 'png', 'webp', 'tiff'])
+			quality = st.sidebar.slider('Quality', 1, 100, 90)
+			out_data = cv2_to_bytes(processed, fmt=out_fmt, quality=quality)
+	except Exception as err:
+		st.error(f'Failed to process image: {err}')
+		return
 
-		# Output format
-		fmt = request.form.get('fmt', 'jpg')
-		quality = int(request.form.get('quality', 90))
-		data = cv2_to_bytes(out, fmt=fmt, quality=quality)
-		# map fmt to standard mimetypes
-		ff = fmt.lower()
-		if ff in ('jpg', 'jpeg'):
-			mimetype = 'image/jpeg'
-		elif ff == 'png':
-			mimetype = 'image/png'
-		elif ff == 'webp':
-			mimetype = 'image/webp'
-		elif ff in ('tif', 'tiff'):
-			mimetype = 'image/tiff'
-		else:
-			mimetype = 'application/octet-stream'
-		return send_file(BytesIO(data), mimetype=mimetype)
+	left, right = st.columns(2)
+	with left:
+		st.subheader('Original')
+		st.image(bgr_to_rgb_for_display(img), use_container_width=True)
+	with right:
+		st.subheader('Processed')
+		st.image(bgr_to_rgb_for_display(processed), use_container_width=True)
 
-	except Exception as e:
-		return jsonify({'error': str(e)}), 500
+	st.download_button(
+		label='Download Processed Image',
+		data=out_data,
+		file_name=f'processed.{out_fmt}',
+		mime='application/octet-stream',
+	)
 
 
 if __name__ == '__main__':
-	# Use host=0.0.0.0 if you want external access; debug=False in production
-	app.run(host='0.0.0.0', debug=True, port=5000)
+	main()
